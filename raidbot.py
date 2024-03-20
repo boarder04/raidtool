@@ -16,7 +16,7 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 
 # Global variable to store the current raid ID and roll sessions
 current_raid_id = None
-roll_sessions = {}  # Add this line to define roll_sessions as a global dictionary
+roll_sessions = {}  
 
 
 # Initialize the database and create tables if they don't exist
@@ -50,7 +50,7 @@ def initialize_db():
             FOREIGN KEY (item_id) REFERENCES items(id)
         )''')
 
-# Function to create a raid
+
 def create_raid(start_time, status='active'):
     with sqlite3.connect('raidbot.db') as conn:
         cursor = conn.cursor()
@@ -69,13 +69,13 @@ def create_item(raid_id, name):
         cursor.execute("INSERT INTO items (raid_id, name) VALUES (?, ?)", (raid_id, name))
         item_id = cursor.lastrowid
         conn.commit()
-        print(f"Created item with ID: {item_id}")  # Debugging print statement
+        print(f"Created item with ID: {item_id}") 
         return item_id
     
 class WinnerSelectView(discord.ui.View):
     def __init__(self, options, item_id, message):
         super().__init__()
-        self.select = WinnerSelect(options=options, item_id=item_id, message=message)  # Pass item_id here
+        self.select = WinnerSelect(options=options, item_id=item_id, message=message) 
         self.add_item(self.select)
 
 
@@ -90,12 +90,14 @@ class WinnerSelect(discord.ui.Select):
         user = await interaction.guild.fetch_member(int(user_id))
         username = user.display_name
         
+        #Database update for selected winner
         update_winner_in_db(self.item_id, user_id, username, contested = 1)
         
+        #Disable menu after use
         self.disabled = True
 
-        #Fetch item name
         item_name = fetch_item_name(self.item_id)
+        
         # Fetch rolls and regenerate the roll results list with the correct user in bold
         rolls = fetch_rolls(self.item_id)
         rolls_with_wins = []
@@ -104,7 +106,7 @@ class WinnerSelect(discord.ui.Select):
             roll_user = await interaction.guild.fetch_member(roll_user_id)
             roll_username = roll_user.display_name
             win_count = count_wins(current_raid_id, roll_user_id, roll_type)
-            is_winner = roll_user_id == int(user_id)  # Check if this user is the selected winner
+            is_winner = roll_user_id == int(user_id)
             rolls_with_wins.append({
                 'user_id': roll_user_id,
                 'name': f"**{roll_username}**" if is_winner else roll_username,
@@ -127,12 +129,10 @@ class WinnerSelect(discord.ui.Select):
         
 class SelectWinnerButton(discord.ui.Button):
     def __init__(self, label, style, custom_id, session, message):
-        # Call the superclass's __init__ method with only the arguments it expects
         super().__init__(label=label, style=style, custom_id=custom_id)
-        
-        # Now handle the 'session' argument separately, storing it for later use
         self.session = session
         self.message = message
+        
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.session.initiator.id:
             # Inform the user they're not authorized if they're not the session initiator
@@ -206,7 +206,6 @@ def count_wins(current_raid_id, user_id, roll_type):
         win_count = cursor.fetchone()[0]
         return win_count
     
-    
 def has_priority_win(current_raid_id, user_id):
     with sqlite3.connect('raidbot.db') as conn:
         cursor = conn.cursor()
@@ -229,11 +228,10 @@ class RollSession:
         self.priority_rolls = {}
         self.standard_rolls = {}
         self.message = None
-        self.initiator = initiator  # Store the user who initiated the roll
+        self.initiator = initiator
         self.combined_rolls = []
         self.selected_winner_id = None
         
-        # Buttons are now part of the class to access their state
         self.priority_roll_button = Button(label="Priority Roll", style=discord.ButtonStyle.green, custom_id="priority_roll")
         self.standard_roll_button = Button(label="Standard Roll", style=discord.ButtonStyle.blurple, custom_id="standard_roll")
         self.leave_button = Button(label="Leave", style=discord.ButtonStyle.red, custom_id="leave")
@@ -270,13 +268,12 @@ class RollSession:
             # Determine if the user is attempting a priority roll and has previously won with a priority roll
             if roll_type == 'priority_roll' and has_priority_win(current_raid_id, user_id):
                 roll_type = 'standard_roll'  # Change their roll to a standard roll
-                item_name = fetch_item_name(self.item_id)  # Assuming you have a function to fetch the item name by its ID
+                item_name = fetch_item_name(self.item_id)  
                 response = f"You already won {item_name} with a Priority Roll, your roll has been updated to a Standard Roll."
             else:
                 if not user_id in self.priority_rolls and not user_id in self.standard_rolls:
                     insert_roll(self.item_id, user_id, roll_type)
                     response = f"You successfully submitted a {roll_name}."
-                    # Update session roll tracking accordingly
                     if roll_type == 'priority_roll':
                         self.priority_rolls[user_id] = interaction.user.display_name
                     elif roll_type == 'standard_roll':
@@ -305,11 +302,11 @@ class RollSession:
         is_contested = 0 if len(combined_rolls_list) == 1 else 1
 
         # Enrich rolls with usernames from Discord and win counts
-        rolls_with_wins = []  # Use a local variable instead of self.rolls_with_wins
+        rolls_with_wins = [] 
         for user_id, roll_type, random_roll_value in combined_rolls_list:
-            user = await self.ctx.bot.fetch_user(user_id)  # Fetch user object from Discord
-            username = user.display_name  # Consider using user.display_name if you want nicknames in a guild context
-            win_count = count_wins(current_raid_id, user_id, roll_type)  # Adjust count_wins function as needed
+            user = await self.ctx.bot.fetch_user(user_id)
+            username = user.display_name
+            win_count = count_wins(current_raid_id, user_id, roll_type)
             rolls_with_wins.append({
                 'user_id': user_id,
                 'name': username,
@@ -346,8 +343,6 @@ class RollSession:
         # Update the message to show the button
         await self.message.edit(content=f"Now Rolling: {self.item_name}\nThe following may bid: {self.classes}\nRolls:\n{roll_results}", view=view)
 
-
-
 @bot.event
 async def on_ready():
     print(f'Bot logged in as {bot.user}')
@@ -368,12 +363,11 @@ async def roll(ctx, item_name: str, classes: str, time: int):
     global current_raid_id
     if current_raid_id is None:
         start_new_raid()
-        # await ctx.send(f"No active raid found. A new raid has been started with ID: {current_raid_id}")
     
     item_id = create_item(current_raid_id, item_name)
     initiator = ctx.author
     session = RollSession(item_name, classes, ctx, time, item_id, initiator)
-    print(f"Roll session started for item ID: {item_id}")  # You might still want this print statement for debugging.
+    print(f"Roll session started for item ID: {item_id}") 
     roll_sessions[ctx.interaction.id] = session
     await session.start()
     
