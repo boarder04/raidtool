@@ -85,6 +85,13 @@ class WinnerSelect(discord.ui.Select):
         self.item_id = item_id
         self.message = message
 
+    # This method is a simple replication of what might exist in RollSession to convert roll_type to roll_name
+    def get_roll_name(self, roll_type):
+        return {
+            'priority_roll': 'Priority Roll',
+            'standard_roll': 'Standard Roll'
+        }.get(roll_type, roll_type)
+
     async def callback(self, interaction: discord.Interaction):
         user_id = self.values[0]
         user = await interaction.guild.fetch_member(int(user_id))
@@ -114,7 +121,10 @@ class WinnerSelect(discord.ui.Select):
             })
 
         rolls_with_wins.sort(key=lambda x: (x['roll_type'] == 'Standard', x['win_count'], -x['random_roll_value']))
-        roll_results = "\n".join([f"{roll['name']} - {roll['roll_type']} Roll: {roll['random_roll_value']} (Wins: {roll['win_count']})" for roll in rolls_with_wins])
+        roll_results = "\n".join([
+            f"{roll['name']} - {self.get_roll_name(roll['roll_type'])} Roll: {roll['random_roll_value']} (Wins: {roll['win_count']})"
+            for roll in rolls_with_wins
+        ])
 
         # Create a new embed with the updated roll results and the winner highlighted
         embed = discord.Embed(title=f"Item: {item_name}", description=f"Item ID: {self.item_id}\nRolls:\n{roll_results}\n\n{username} has been updated as the winner!", color=discord.Color.blue())
