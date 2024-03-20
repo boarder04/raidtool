@@ -90,15 +90,13 @@ class WinnerSelect(discord.ui.Select):
         user = await interaction.guild.fetch_member(int(user_id))
         username = user.display_name
         
-        #Database update for selected winner
-        update_winner_in_db(self.item_id, user_id, username, contested = 1)
+        # Update the database with the selected winner
+        update_winner_in_db(self.item_id, user_id, username, contested=1)
         
-        #Disable menu after use
-        self.disabled = True
-
+        # Fetch item name for the embed title
         item_name = fetch_item_name(self.item_id)
         
-        # Fetch rolls and regenerate the roll results list with the correct user in bold
+        # Fetch rolls and prepare roll results
         rolls = fetch_rolls(self.item_id)
         rolls_with_wins = []
         for roll in rolls:
@@ -116,13 +114,22 @@ class WinnerSelect(discord.ui.Select):
             })
 
         rolls_with_wins.sort(key=lambda x: (x['roll_type'] == 'Standard', x['win_count'], -x['random_roll_value']))
-        roll_results = "\n".join([f"{roll['name']} - {roll['roll_type']} Roll: {roll['random_roll_value']} (Wins: {roll['win_count']})"
-                                  for roll in rolls_with_wins])
+        roll_results = "\n".join([f"{roll['name']} - {roll['roll_type']} Roll: {roll['random_roll_value']} (Wins: {roll['win_count']})" for roll in rolls_with_wins])
 
+        # Create a new embed with the updated roll results and the winner highlighted
+        embed = discord.Embed(title=f"Item: {item_name}", description=f"Item ID: {self.item_id}\nRolls:\n{roll_results}\n\n{username} has been updated as the winner!", color=discord.Color.blue())
 
-        # Update the original message with the new winner highlighted
-        await self.message.edit(content=f"Item: {item_name}\nItem ID: {self.item_id}\nRolls:\n{roll_results}\n\n{username} has been updated as the winner", view=None)
+        # Disable the dropdown menu after selection
+        self.disabled = True
+        for item in self.view.children:
+            item.disabled = True  # Disable all interactive components in the view
+
+        # Update the message with the new embed and disable the view
+        await self.message.edit(embed=embed, view=None)
+
+        # Acknowledge the interaction
         await interaction.response.edit_message(content=f"{username} has been updated as the winner!", view=self.view)
+
 
 
 
@@ -285,11 +292,14 @@ class RollSession:
         await interaction.response.send_message(response, ephemeral=True)
 
     async def start(self):
+        embed = discord.Embed(title=f"Now Rolling: {self.item_name}",
+                              description=f"The following may bid: {self.classes}",
+                              color=discord.Color.blue())
         view = View()
         view.add_item(self.priority_roll_button)
         view.add_item(self.standard_roll_button)
         view.add_item(self.leave_button)
-        self.message = await self.ctx.respond(f"Now Rolling: {self.item_name}\nThe following may bid: {self.classes}", view=view)
+        self.message = await self.ctx.respond(embed=embed, view=view)
 
         await asyncio.sleep(self.time)
         await self.end_roll()
@@ -330,6 +340,10 @@ class RollSession:
             for idx, roll in enumerate(rolls_with_wins)
         ])
 
+        embed = discord.Embed(title=f"Item: {self.item_name}",
+                              description=f"Item ID: {self.item_id}\nRolls:\n{roll_results}",
+                              color=discord.Color.blue())
+
         # Update the database with the default winner's information
         if rolls_with_wins:
             default_winner = rolls_with_wins[0]
@@ -341,7 +355,7 @@ class RollSession:
         view.add_item(select_winner_button)
         
         # Update the message to show the button
-        await self.message.edit(content=f"Now Rolling: {self.item_name}\nThe following may bid: {self.classes}\nRolls:\n{roll_results}", view=view)
+        await self.message.edit(embed=embed, view=view)
 
 @bot.event
 async def on_ready():
