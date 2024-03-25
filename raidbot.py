@@ -6,6 +6,7 @@ import asyncio
 import sqlite3
 import datetime
 import random
+import uuid
 import config
 
 intents = discord.Intents.default()
@@ -37,7 +38,8 @@ def initialize_db():
             name TEXT,
             winner_user_id TEXT,
             winner_username TEXT,
-            contested BOOLEAN DEFAULT 1,           
+            contested BOOLEAN DEFAULT 1,   
+            session_id TEXT,
             FOREIGN KEY (raid_id) REFERENCES raids(id)
         )''')
         cursor.execute('''
@@ -63,13 +65,13 @@ def start_new_raid():
     current_raid_id = create_raid(start_time)
     print(f"Raid automatically started with ID: {current_raid_id}")
 
-def create_item(raid_id, name):
+def create_item(raid_id, name, session_id):
     with sqlite3.connect('raidbot.db') as conn:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO items (raid_id, name) VALUES (?, ?)", (raid_id, name))
+        cursor.execute("INSERT INTO items (raid_id, name, session_id) VALUES (?, ?, ?)", (raid_id, name, session_id))
         item_id = cursor.lastrowid
         conn.commit()
-        print(f"Created item with ID: {item_id}") 
+        print(f"Created item with ID: {item_id} for session ID: {session_id}") 
         return item_id
     
 class WinnerSelectView(discord.ui.View):
@@ -168,12 +170,17 @@ class SelectWinnerButton(discord.ui.Button):
 
 def insert_roll(item_id, user_id, roll_type):
     random_roll_value = random.randint(1, 10000)
-    with sqlite3.connect('raidbot.db') as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO rolls (item_id, user_id, roll_type, random_roll_value) VALUES (?, ?, ?, ?)
-        """, (item_id, user_id, roll_type, random_roll_value))
-        conn.commit()
+    print(f"Inserting roll for item_id: {item_id}, user_id: {user_id}, roll_type: {roll_type}, roll_value: {random_roll_value}")
+    try:
+        with sqlite3.connect('raidbot.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO rolls (item_id, user_id, roll_type, random_roll_value) VALUES (?, ?, ?, ?)
+            """, (item_id, user_id, roll_type, random_roll_value))
+            conn.commit()
+            print("Roll inserted successfully.")
+    except Exception as e:
+        print(f"Failed to insert roll: {e}")
         
 def update_winner_in_db(item_id, winner_id, winner_name, contested=1):
     with sqlite3.connect('raidbot.db') as conn:
@@ -185,7 +192,20 @@ def update_winner_in_db(item_id, winner_id, winner_name, contested=1):
         """, (winner_id, winner_name, contested, item_id))
         conn.commit()
         
+def fetch_rolls(session_id):
+    with sqlite3.connect('raidbot.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT user_id, roll_type, random_roll_value
+            FROM rolls
+            JOIN items ON rolls.item_id = items.id
+            WHERE items.session_id = ? AND roll_type != 'cancelled'
+            ORDER BY roll_type DESC, random_roll_value DESC
+        """, (session_id,))
+        return cursor.fetchall()
+
 def fetch_rolls(item_id):
+    print(f"Fetching rolls for item_id: {item_id}")
     with sqlite3.connect('raidbot.db') as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -194,17 +214,30 @@ def fetch_rolls(item_id):
             WHERE item_id = ? AND roll_type != 'cancelled'
             ORDER BY roll_type DESC, random_roll_value DESC
         """, (item_id,))
-        return cursor.fetchall()
+        rolls = cursor.fetchall()
+    print(f"Found rolls: {rolls}")
+    return rolls
 
 def fetch_item_name(item_id):
     with sqlite3.connect('raidbot.db') as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM items WHERE id = ?", (item_id,))
-        item_name = cursor.fetchone()
-        if item_name:
-            return item_name[0]
+        result = cursor.fetchone()
+        if result:
+            return result[0]  # Return the name of the item.
         else:
-            return None
+            return None  # Item not found.
+        
+def fetch_item_id_by_session_id(session_id):
+    with sqlite3.connect('raidbot.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM items WHERE session_id = ?", (session_id,))
+        result = cursor.fetchone()
+        if result:
+            return result[0]  # Return the item_id.
+        else:
+            return None  # Session ID not found.
+
 
 def count_wins(current_raid_id, user_id, roll_type):
     """Count the number of wins for the given user_id within the current raid based on roll_type."""
@@ -235,23 +268,29 @@ def has_priority_win(current_raid_id, user_id):
         win_count = cursor.fetchone()[0]
         return win_count > 0
 
+
 class RollSession:
-    def __init__(self, item_name, classes, ctx, time, item_id, initiator):
+    def __init__(self, item_name, classes, ctx, time, item_id, initiator, session_id):
         self.item_name = item_name
         self.classes = classes
         self.ctx = ctx
         self.time = time
         self.item_id = item_id
+        self.initiator = initiator
+        self.session_id = session_id  # Store session ID
         self.priority_rolls = {}
         self.standard_rolls = {}
         self.message = None
-        self.initiator = initiator
         self.combined_rolls = []
         self.selected_winner_id = None
         
-        self.priority_roll_button = Button(label="Priority Roll", style=discord.ButtonStyle.green, custom_id="priority_roll")
-        self.standard_roll_button = Button(label="Standard Roll", style=discord.ButtonStyle.blurple, custom_id="standard_roll")
-        self.leave_button = Button(label="Leave", style=discord.ButtonStyle.red, custom_id="leave")
+        
+        combined_custom_id = f"priority_roll:{session_id}"
+        self.priority_roll_button = Button(label="Priority Roll", style=discord.ButtonStyle.green, custom_id=combined_custom_id)
+        combined_custom_id = f"standard_roll:{session_id}"
+        self.standard_roll_button = Button(label="Standard Roll", style=discord.ButtonStyle.blurple, custom_id=combined_custom_id)
+        combined_custom_id = f"leave:{session_id}"
+        self.leave_button = Button(label="Leave", style=discord.ButtonStyle.red, custom_id=combined_custom_id)
 
         self.priority_roll_button.callback = self.handle_roll
         self.standard_roll_button.callback = self.handle_roll
@@ -267,6 +306,17 @@ class RollSession:
     async def handle_roll(self, interaction: discord.Interaction):
         roll_type = interaction.data['custom_id']
         user_id = interaction.user.id
+        item_id = fetch_item_id_by_session_id(self.session_id)
+        custom_id = interaction.data['custom_id']
+        roll_type, session_id = custom_id.split(':')
+        session = roll_sessions.get(session_id)
+        
+        # If the user has already rolled, prevent another submission.
+        if user_id in self.priority_rolls or user_id in self.standard_rolls:
+            response = "You have already submitted a roll."
+        else:
+            pass
+        
         roll_name = self.get_roll_name(roll_type)
         
         if roll_type == "leave":
@@ -282,22 +332,29 @@ class RollSession:
             self.standard_rolls.pop(user_id, None)
             response = "You have left the roll."
         else:
-            # Determine if the user is attempting a priority roll and has previously won with a priority roll
+            # Check if the user has already rolled for this item
+            user_has_rolled = user_id in self.priority_rolls or user_id in self.standard_rolls
+    
             if roll_type == 'priority_roll' and has_priority_win(current_raid_id, user_id):
-                roll_type = 'standard_roll'  # Change their roll to a standard roll
-                item_name = fetch_item_name(self.item_id)  
-                response = f"You already won {item_name} with a Priority Roll, your roll has been updated to a Standard Roll."
+                # User tries a priority roll but has won a priority roll before; change to standard.
+                roll_type = 'standard_roll'
+                response = f"You already won with a Priority Roll, so your roll has been changed to a Standard Roll."
+                # Note: Depending on your game rules, you might not want to automatically change the roll type.
+                # Instead, you could simply inform the user and ask them to roll again manually.
+            elif user_has_rolled:
+                # User has already submitted a roll for this item
+                response = "You have already submitted a roll."
             else:
-                if not user_id in self.priority_rolls and not user_id in self.standard_rolls:
-                    insert_roll(self.item_id, user_id, roll_type)
-                    response = f"You successfully submitted a {roll_name}."
-                    if roll_type == 'priority_roll':
-                        self.priority_rolls[user_id] = interaction.user.display_name
-                    elif roll_type == 'standard_roll':
-                        self.standard_rolls[user_id] = interaction.user.display_name
-                else:
-                    response = "You have already submitted a roll."
-                pass
+                # Insert the roll since the user hasn't rolled yet for this item
+                insert_roll(self.item_id, user_id, roll_type)
+                response = f"You successfully submitted a {roll_name}."
+
+                # Update the roll tracking dictionary
+                if roll_type == 'priority_roll':
+                    self.priority_rolls[user_id] = True  # Mark as rolled
+                else:  # This else covers 'standard_roll'
+                    self.standard_rolls[user_id] = True  # Mark as rolled
+
             
         await interaction.response.send_message(response, ephemeral=True)
 
@@ -317,15 +374,15 @@ class RollSession:
     async def end_roll(self):
         # Fetch rolls from the database
         combined_rolls_list = fetch_rolls(self.item_id)
-        
+    
         # Determine if the item is contested
         is_contested = 0 if len(combined_rolls_list) == 1 else 1
 
-        # Enrich rolls with usernames from Discord and win counts
         rolls_with_wins = [] 
         for user_id, roll_type, random_roll_value in combined_rolls_list:
-            user = await self.ctx.bot.fetch_user(user_id)
-            username = user.display_name
+            # Fetch the member object from the guild using the user_id
+            user = await self.ctx.guild.fetch_member(user_id)
+            username = user.display_name  # Now 'user' is correctly defined
             win_count = count_wins(current_raid_id, user_id, roll_type)
             rolls_with_wins.append({
                 'user_id': user_id,
@@ -366,6 +423,12 @@ class RollSession:
         
         # Update the message to show the button
         await self.message.edit(embed=embed, view=view)
+        
+        # Remove the session from roll_sessions
+        global roll_sessions
+        if self.session_id in roll_sessions:
+            del roll_sessions[self.session_id]
+            print(f"Roll session {self.session_id} ended and removed.")
 
 @bot.event
 async def on_ready():
@@ -388,11 +451,12 @@ async def roll(ctx, item_name: str, classes: str, time: int):
     if current_raid_id is None:
         start_new_raid()
     
-    item_id = create_item(current_raid_id, item_name)
+    session_id = str(uuid.uuid4())  # Ensure this is generated as before
+    item_id = create_item(current_raid_id, item_name, session_id)  # Now passing session_id
     initiator = ctx.author
-    session = RollSession(item_name, classes, ctx, time, item_id, initiator)
-    print(f"Roll session started for item ID: {item_id}") 
-    roll_sessions[ctx.interaction.id] = session
+    session = RollSession(item_name, classes, ctx, time, item_id, initiator, session_id)
+    print(f"Roll session started for item ID: {item_id} with session ID: {session_id}") 
+    roll_sessions[session_id] = session
     await session.start()
     
 @bot.slash_command(name="endraid", description="End the current raid")
