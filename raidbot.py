@@ -122,7 +122,7 @@ class WinnerSelect(discord.ui.Select):
                 'win_count': win_count-1 if is_winner else win_count
             })
 
-        rolls_with_wins.sort(key=lambda x: (x['roll_type'] == 'Standard', x['win_count'], -x['random_roll_value']))
+        rolls_with_wins.sort(key=lambda x: (x['roll_type'] != 'priority_roll', x['win_count'], -x['random_roll_value']))
         roll_results = "\n".join([
             f"{roll['name']} - {self.get_roll_name(roll['roll_type'])} Roll: {roll['random_roll_value']} (Wins: {roll['win_count']})"
             for roll in rolls_with_wins
@@ -267,6 +267,32 @@ def has_priority_win(current_raid_id, user_id):
         """, (current_raid_id, user_id, user_id))
         win_count = cursor.fetchone()[0]
         return win_count > 0
+    
+def generate_raid_summary(raid_id):
+    summary = ""
+    with sqlite3.connect('raidbot.db') as conn:
+        cursor = conn.cursor()
+        
+        # Total Items
+        cursor.execute("SELECT COUNT(*) FROM items WHERE raid_id = ?", (raid_id,))
+        total_items = cursor.fetchone()[0]
+        
+        # Total Unique Winners
+        cursor.execute("SELECT COUNT(DISTINCT winner_user_id) FROM items WHERE raid_id = ? AND winner_user_id IS NOT NULL", (raid_id,))
+        total_unique_winners = cursor.fetchone()[0]
+        
+        # Each item and its winner
+        cursor.execute("SELECT name, winner_username FROM items WHERE raid_id = ?", (raid_id,))
+        items_and_winners = cursor.fetchall()
+        
+    # Formatting the summary
+    summary += f"Total Items: {total_items}\n"
+    summary += f"Total Unique Winners: {total_unique_winners}\n\n"
+    summary += "Items and Winners:\n"
+    for item, winner in items_and_winners:
+        summary += f"- {item}: {winner}\n"
+    
+    return summary.strip()
 
 
 class RollSession:
@@ -338,6 +364,7 @@ class RollSession:
             if roll_type == 'priority_roll' and has_priority_win(current_raid_id, user_id):
                 # User tries a priority roll but has won a priority roll before; change to standard.
                 roll_type = 'standard_roll'
+                insert_roll(self.item_id, user_id, roll_type)
                 response = f"You already won with a Priority Roll, so your roll has been changed to a Standard Roll."
                 # Note: Depending on your game rules, you might not want to automatically change the roll type.
                 # Instead, you could simply inform the user and ask them to roll again manually.
@@ -393,7 +420,7 @@ class RollSession:
             })
 
         # Sort: by roll type (Priority first), then by wins (ascending), and then by random_roll_value (descending)
-        rolls_with_wins.sort(key=lambda x: (x['roll_type'] == 'Standard', x['win_count'], -x['random_roll_value']))
+        rolls_with_wins.sort(key=lambda x: (x['roll_type'] != 'priority_roll', x['win_count'], -x['random_roll_value']))
 
         # Prepare options for WinnerSelectView with updated list
         options = [discord.SelectOption(label=f"{roll['name']}", value=str(roll['user_id'])) for roll in rolls_with_wins]
@@ -466,6 +493,9 @@ async def end_raid(ctx):
         await ctx.respond("No active raid to end.")
         return
     
+    # Generate the raid summary before ending the raid
+    raid_summary = generate_raid_summary(current_raid_id)
+    
     # Update the raid's status in the database
     with sqlite3.connect('raidbot.db') as conn:
         cursor = conn.cursor()
@@ -473,7 +503,9 @@ async def end_raid(ctx):
         conn.commit()
 
     current_raid_id = None  # Reset current raid ID to indicate no active raid
-    await ctx.respond("Raid ended successfully.")
+    
+    # Respond with the summary of the raid
+    await ctx.respond(f"Raid ended successfully.\n\nRaid Summary:\n{raid_summary}")
 
 
 bot.run(config.TOKEN)
